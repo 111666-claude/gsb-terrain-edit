@@ -1,12 +1,17 @@
 // Package terraedit 是地块编辑：权限校验、编辑幂等、撤销栈、按地块索引。
-// 缺陷：不校验权限、重复编辑也入撤销栈、撤销没有实现、每次查询全扫地块表。
 package terraedit
+
+// edit 是一次有效编辑的撤销记录：地块坐标与编辑前的值。
+type edit struct {
+	x, y     int
+	oldValue int
+}
 
 // Editor 是地块编辑器。
 type Editor struct {
 	roles   map[string]string
 	cells   map[[2]int]int
-	stack   [][2]int
+	stack   []edit
 	scanned int
 }
 
@@ -15,19 +20,36 @@ func NewEditor(roles map[string]string) *Editor {
 	return &Editor{roles: roles, cells: map[[2]int]int{}}
 }
 
-// Apply 修改一个地块。缺陷：不校验角色权限、重复编辑也压栈。
+// Apply 修改一个地块。只有 admin 或 builder 能编辑；设成当前值属于重复编辑，
+// 返回 (false, "duplicate") 且不入撤销栈。
 func (e *Editor) Apply(player string, x, y, value int) (bool, string) {
+	if role := e.roles[player]; role != "admin" && role != "builder" {
+		return false, "denied"
+	}
+	key := [2]int{x, y}
+	old := e.cells[key]
+	if old == value {
+		return false, "duplicate"
+	}
 	e.cells[[2]int{x, y}] = value
-	e.stack = append(e.stack, [2]int{x, y})
+	e.stack = append(e.stack, edit{x: x, y: y, oldValue: old})
 	return true, "ok"
 }
 
-// Undo 撤销上一次编辑。缺陷：没有实现。
-func (e *Editor) Undo() bool { return false }
+// Undo 按后进先出恢复上一次编辑前的值，栈空返回 false。
+func (e *Editor) Undo() bool {
+	if len(e.stack) == 0 {
+		return false
+	}
+	last := e.stack[len(e.stack)-1]
+	e.stack = e.stack[:len(e.stack)-1]
+	e.cells[[2]int{last.x, last.y}] = last.oldValue
+	return true
+}
 
-// Value 读一个地块。缺陷：每次全扫地块表。
+// Value 读一个地块，按坐标索引，摊还 O(1)。
 func (e *Editor) Value(x, y int) int {
-	e.scanned += len(e.cells)
+	e.scanned++
 	return e.cells[[2]int{x, y}]
 }
 
